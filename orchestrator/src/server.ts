@@ -11,6 +11,7 @@ import {
   StatusResponse,
 } from './types';
 import { MockAgent } from './mock-agent';
+import { RealAgent } from './real-agent';
 
 const app = express();
 
@@ -18,13 +19,20 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Check if we should use real agent (ANTHROPIC_API_KEY is set or Claude Code is authenticated)
+const USE_REAL_AGENT = process.env.USE_REAL_AGENT === 'true' || process.env.ANTHROPIC_API_KEY;
+
 // In-memory storage for agent sessions
 const sessions = new Map<string, AgentSession>();
-const mockAgents = new Map<string, MockAgent>();
+const agents = new Map<string, MockAgent | RealAgent>();
 
 // Health check
 app.get('/health', (_req: Request, res: Response) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'ok',
+    mode: USE_REAL_AGENT ? 'real' : 'mock',
+    timestamp: new Date().toISOString()
+  });
 });
 
 // POST /agent/create - Create a new agent session
@@ -48,9 +56,15 @@ app.post('/agent/create', (req: Request<{}, {}, CreateAgentRequest>, res: Respon
   };
 
   sessions.set(id, session);
-  mockAgents.set(id, new MockAgent(session));
 
-  console.log(`[Server] Created agent: ${id} (${name})`);
+  // Create real or mock agent based on configuration
+  if (USE_REAL_AGENT) {
+    agents.set(id, new RealAgent(session));
+  } else {
+    agents.set(id, new MockAgent(session));
+  }
+
+  console.log(`[Server] Created agent: ${id} (${name}) [${USE_REAL_AGENT ? 'REAL' : 'MOCK'}]`);
 
   res.json({ id, status: 'created' });
 });
@@ -96,9 +110,9 @@ app.post('/agent/:id/query', async (req: Request<{ id: string }, {}, QueryReques
   const { prompt } = req.body;
 
   const session = sessions.get(id);
-  const mockAgent = mockAgents.get(id);
+  const agent = agents.get(id);
 
-  if (!session || !mockAgent) {
+  if (!session || !agent) {
     res.status(404).json({ status: 'error', message: 'Agent not found' });
     return;
   }
@@ -110,8 +124,8 @@ app.post('/agent/:id/query', async (req: Request<{ id: string }, {}, QueryReques
 
   console.log(`[Server] Query: ${id.slice(0, 8)} - "${prompt.slice(0, 50)}..."`);
 
-  // Start mock agent (async, returns immediately)
-  mockAgent.runQuery(prompt);
+  // Start agent (async, returns immediately)
+  agent.runQuery(prompt);
 
   res.json({ status: 'processing' });
 });
@@ -137,16 +151,16 @@ app.get('/agent/:id/status', (req: Request<{ id: string }>, res: Response<Status
 app.post('/agent/:id/interrupt', (req: Request<{ id: string }>, res: Response) => {
   const { id } = req.params;
   const session = sessions.get(id);
-  const mockAgent = mockAgents.get(id);
+  const agent = agents.get(id);
 
-  if (!session || !mockAgent) {
+  if (!session || !agent) {
     res.status(404).json({ error: 'Agent not found' });
     return;
   }
 
   console.log(`[Server] Interrupt: ${id.slice(0, 8)}`);
 
-  mockAgent.interrupt();
+  agent.interrupt();
 
   res.json({ status: 'interrupted' });
 });
@@ -154,14 +168,14 @@ app.post('/agent/:id/interrupt', (req: Request<{ id: string }>, res: Response) =
 // DELETE /agent/:id - Delete agent session
 app.delete('/agent/:id', (req: Request<{ id: string }>, res: Response) => {
   const { id } = req.params;
-  const mockAgent = mockAgents.get(id);
+  const agent = agents.get(id);
 
-  if (mockAgent) {
-    mockAgent.stop();
+  if (agent) {
+    agent.stop();
   }
 
   sessions.delete(id);
-  mockAgents.delete(id);
+  agents.delete(id);
 
   console.log(`[Server] Deleted agent: ${id.slice(0, 8)}`);
 

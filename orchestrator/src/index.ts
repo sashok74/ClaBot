@@ -1,10 +1,13 @@
+import 'dotenv/config';
 import { app } from './server';
 
 const PORT = process.env.PORT || 3000;
 
+const USE_REAL_AGENT = process.env.USE_REAL_AGENT === 'true' || process.env.ANTHROPIC_API_KEY;
+
 app.listen(PORT, () => {
   console.log('========================================');
-  console.log('  ClaBot Orchestrator (Mock Mode)');
+  console.log(`  ClaBot Orchestrator (${USE_REAL_AGENT ? 'REAL' : 'MOCK'} Mode)`);
   console.log('========================================');
   console.log(`  Server running on http://localhost:${PORT}`);
   console.log('');
