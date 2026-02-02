@@ -1,0 +1,62 @@
+# C++ Builder build artifacts
+*.~*
+*.o
+*.obj
+*.d
+*.res
+*.pdb
+*.map
+*.exe
+*.dll
+*.tds
+*.dcu
+*.bpi
+*.bpl
+*.pch
+*.pdi
+*.ilc
+*.ild
+*.ilf
+*.ils
+*.stat
+*.bcc32pch
+*.local
+*.ddp
+*.dsk
+
+# C++ Builder directories
+__astcache/
+__history/
+__recovery/
+Win32/
+Win64/
+Win64x/
+
+# Node.js
+node_modules/
+dist/
+*.log
+npm-debug.log*
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# Archives
+*.rar
+*.zip
+*.7z
+
+# Temp files
+*.tmp
+*.temp
+temp.txt
+output.txt
+output.xml
+nul
+NUL
+
+# Local configs (not shared)
+CLAUDE.local.md
+.claude/
