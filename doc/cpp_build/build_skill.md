@@ -28,11 +28,12 @@ Claude Code также автоматически использует этот 
 ## Как это работает
 
 1. **Очистка** — удаление старых логов и отчётов об ошибках.
-2. **Сборка** — запуск `build.ps1`, который вызывает MSBuild через `cmd.exe` с настроенным окружением RAD Studio (`rsvars.bat`).
-3. **Парсинг** — `parse_msbuild_errors.py` разбирает `msbuild.errors.log`, создаёт:
+2. **Pre-clean + retry** — `build.ps1` по умолчанию запускает `msbuild /t:Clean`, чистит stale `*.tmp`/`*.o.tmp` intermediates и при `E74 permission denied` делает автоматический retry.
+3. **Сборка** — запуск `build.ps1`, который вызывает MSBuild через `cmd.exe` с настроенным окружением RAD Studio (`rsvars.bat`).
+4. **Парсинг** — `parse_msbuild_errors.py` разбирает `msbuild.errors.log`, создаёт:
    - `errors/index.json` — JSON-индекс со счётчиком ошибок и данными по файлам.
    - `errors/<file>.err.txt` — текстовые отчёты по каждому файлу с ошибками.
-4. **Отчёт** — Claude Code читает `index.json`, при наличии ошибок читает исходники и предлагает исправления.
+5. **Отчёт** — Claude Code читает `index.json`, при наличии ошибок читает исходники и предлагает исправления.
 
 ## Формат index.json
 
@@ -61,3 +62,4 @@ Claude Code также автоматически использует этот 
 - Аргументы MSBuild с `;` (например, `/flp:...;verbosity=diagnostic`) обёрнуты в кавычки для корректной передачи через `cmd.exe`.
 - Парсер обрабатывает MSBuild node-prefix `1>` и trailing `[project.cbproj]` в строках ошибок.
 - Platform по умолчанию `Win64x`, конфигурация `Debug`.
+- Для отключения устойчивого режима доступны параметры `-PreClean:$false`, `-PurgeIntermediates:$false`, `-RetryOnE74 0`; для ожидания освобождения lock-файла — `-LockWaitMs <ms>`; для авто-попытки исправить ACL intermediates — `-FixIntermediateAcl $true`.

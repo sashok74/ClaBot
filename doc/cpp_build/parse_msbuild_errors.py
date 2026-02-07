@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-# Parses msbuild.log and/or msbuild.errors.log into per-file error text files and a JSON index
-import re, os, json, sys
+# Parses msbuild.log and/or msbuild.errors.log into per-file reports and JSON index
+import json
+import os
+import re
+import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 LOGS = os.path.join(ROOT, "logs")
@@ -17,69 +20,97 @@ if not log_path:
 with open(log_path, "r", encoding="utf-8", errors="replace") as f:
     lines = f.read().splitlines()
 
-# Typical MSBuild/Embarcadero formats:
-# File.cpp(123): error E2451: message
-# File.cpp(123,45): warning W8004: message
-# Path\to\File.cpp(12,7): error: something (some tools omit code)
-# 1>uMain.cpp(15,13): error E4656: message [C:\path\project.cbproj]
-pattern = re.compile(r"""^
-    (?:\d+>)?                                       # optional MSBuild node prefix "1>"
-    (?P<file>[A-Za-z]:\\[^:(]+|\.[^:(]+|[^:(]+)     # file path (rough)
-    \(
-        (?P<line>\d+)
-        (?:,(?P<col>\d+))?
-    \)\s*:\s*
-    (?:(?P<kind>error|warning))\s*
-    (?P<code>[A-Za-z]\d+)?
-    \s*:\s*
-    (?P<message>.*)
-$""", re.X)
+# With location:
+# 1>uMain.cpp(15,13): error E4656: ...
+# 1>C:\Program Files (x86)\...\CodeGear.Cpp.Targets(3018,5): error E74: ...
+WITH_LOCATION = re.compile(
+    r"^(?:\d+>)?(?P<file>.+?)\((?P<line>\d+)(?:,(?P<col>\d+))?\)\s*:\s*"
+    r"(?P<kind>error|warning)\s*(?P<code>[A-Za-z]+\d+)?\s*:\s*(?P<message>.+)$",
+    re.IGNORECASE,
+)
+
+# Without location:
+# some_tool: error XYZ123: ...
+WITHOUT_LOCATION = re.compile(
+    r"^(?:\d+>)?(?P<file>.+?)\s*:\s*(?P<kind>error|warning)\s*"
+    r"(?P<code>[A-Za-z]+\d+)?\s*:\s*(?P<message>.+)$",
+    re.IGNORECASE,
+)
+
+
+def normalize_file_path(file_path: str) -> str:
+    file_path = file_path.strip().strip('"')
+    return file_path.replace("/", "\\")
+
+
+def normalize_message(message: str) -> str:
+    # Strip trailing project marker: [C:\path\project.cbproj]
+    return re.sub(r"\s*\[.*?\.cbproj\]\s*$", "", (message or "").strip())
+
+
+def to_issue(match: re.Match, has_location: bool) -> dict:
+    d = match.groupdict()
+    issue = {
+        "file": normalize_file_path(d["file"]),
+        "line": int(d["line"]) if has_location else None,
+        "col": int(d["col"]) if has_location and d.get("col") else None,
+        "kind": (d.get("kind") or "error").lower(),
+        "code": (d.get("code") or "").strip(),
+        "message": normalize_message(d.get("message") or ""),
+    }
+    return issue
+
 
 by_file = {}
 all_issues = []
 
-for ln in lines:
-    m = pattern.match(ln.strip())
-    if not m:
+for raw_line in lines:
+    line = raw_line.strip()
+    if not line:
         continue
-    d = m.groupdict()
-    file_path = d["file"].strip()
-    # Normalize path separators for Windows style
-    file_path = file_path.replace("/", "\\")
-    item = {
-        "file": file_path,
-        "line": int(d["line"]),
-        "col": int(d["col"]) if d.get("col") else None,
-        "kind": d.get("kind") or "error",
-        "code": (d.get("code") or "").strip(),
-        # Strip trailing MSBuild project reference like [C:\path\project.cbproj]
-        "message": re.sub(r'\s*\[.*\.cbproj\]\s*$', '', d.get("message") or "")
-    }
-    all_issues.append(item)
-    by_file.setdefault(file_path, []).append(item)
 
-def safe_name(p):
-    # Turn "C:\path\to\File.cpp" into "C__path_to_File.cpp.err.txt"
-    s = p.replace(":", "_").replace("\\", "_").replace("/", "_")
-    return s
+    match = WITH_LOCATION.match(line)
+    has_location = True
+
+    if not match:
+        match = WITHOUT_LOCATION.match(line)
+        has_location = False
+
+    if not match:
+        continue
+
+    issue = to_issue(match, has_location)
+    all_issues.append(issue)
+    by_file.setdefault(issue["file"], []).append(issue)
+
+
+def safe_name(path: str) -> str:
+    # Turn "C:\path\to\File.cpp" into "C__path_to_File.cpp"
+    return path.replace(":", "_").replace("\\", "_").replace("/", "_")
+
 
 # Write per-file error reports
-for fpath, issues in by_file.items():
-    name = safe_name(fpath) + ".err.txt"
-    outp = os.path.join(ERRORS, name)
-    with open(outp, "w", encoding="utf-8") as w:
-        for it in issues:
-            loc = f"{it['file']}({it['line']}{','+str(it['col']) if it['col'] else ''})"
-            code = f" {it['code']}" if it['code'] else ""
-            w.write(f"{loc}: {it['kind']}{code}: {it['message']}\n")
+for file_path, issues in by_file.items():
+    output_path = os.path.join(ERRORS, safe_name(file_path) + ".err.txt")
+    with open(output_path, "w", encoding="utf-8") as out:
+        for issue in issues:
+            if issue["line"] is None:
+                location = issue["file"]
+            elif issue["col"] is None:
+                location = f"{issue['file']}({issue['line']})"
+            else:
+                location = f"{issue['file']}({issue['line']},{issue['col']})"
 
-# Write JSON index for agents
+            code_suffix = f" {issue['code']}" if issue["code"] else ""
+            out.write(f"{location}: {issue['kind']}{code_suffix}: {issue['message']}\n")
+
+
 index = {
     "total_issues": len(all_issues),
     "files_with_issues": len(by_file),
-    "by_file": by_file
+    "by_file": by_file,
 }
-with open(os.path.join(ERRORS, "index.json"), "w", encoding="utf-8") as w:
-    json.dump(index, w, ensure_ascii=False, indent=2)
+with open(os.path.join(ERRORS, "index.json"), "w", encoding="utf-8") as out:
+    json.dump(index, out, ensure_ascii=False, indent=2)
 
 print(f"Parsed {len(all_issues)} issues across {len(by_file)} files.")

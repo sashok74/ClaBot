@@ -21,14 +21,21 @@ export interface AgentSession {
   status: AgentStatus;
   createdAt: Date;
   eventListeners: Set<(event: AgentEvent) => void>;
+  // Session tracking for resume support
+  sdkSessionId?: string;
+  canResume: boolean;
+  inputTokens: number;
+  outputTokens: number;
+  totalCostUsd: number;
 }
 
 // SSE Events
 export type AgentEvent =
   | { type: 'session_start'; sessionId: string; config: AgentConfig }
+  | { type: 'session_info'; sdkSessionId: string; canResume: boolean }
   | { type: 'thinking'; content: string }
   | { type: 'tool_start'; tool: string; input: unknown; toolUseId: string }
-  | { type: 'tool_end'; tool: string; output: unknown; toolUseId: string; durationMs: number }
+  | { type: 'tool_end'; tool: string; input: unknown; output: unknown; toolUseId: string; durationMs: number }
   | { type: 'tool_error'; tool: string; error: string; toolUseId: string }
   | { type: 'assistant_message'; content: string; uuid: string }
   | { type: 'user_message'; content: string; uuid: string }
@@ -60,6 +67,7 @@ export interface CreateAgentResponse {
 
 export interface QueryRequest {
   prompt: string;
+  resume?: boolean;  // Continue existing session instead of starting new
 }
 
 export interface QueryResponse {
@@ -71,4 +79,13 @@ export interface StatusResponse {
   id: string;
   status: AgentStatus;
   config: AgentConfig;
+}
+
+export interface SessionResponse {
+  id: string;
+  sdkSessionId?: string;
+  canResume: boolean;
+  inputTokens: number;
+  outputTokens: number;
+  totalCostUsd: number;
 }

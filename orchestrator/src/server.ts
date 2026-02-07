@@ -9,6 +9,7 @@ import {
   QueryRequest,
   QueryResponse,
   StatusResponse,
+  SessionResponse,
 } from './types';
 import { MockAgent } from './mock-agent';
 import { RealAgent } from './real-agent';
@@ -53,6 +54,11 @@ app.post('/agent/create', (req: Request<{}, {}, CreateAgentRequest>, res: Respon
     status: 'created',
     createdAt: new Date(),
     eventListeners: new Set(),
+    // Session tracking fields
+    canResume: false,
+    inputTokens: 0,
+    outputTokens: 0,
+    totalCostUsd: 0,
   };
 
   sessions.set(id, session);
@@ -107,7 +113,7 @@ app.get('/agent/:id/events', (req: Request<{ id: string }>, res: Response) => {
 // POST /agent/:id/query - Send a prompt to the agent
 app.post('/agent/:id/query', async (req: Request<{ id: string }, {}, QueryRequest>, res: Response<QueryResponse>) => {
   const { id } = req.params;
-  const { prompt } = req.body;
+  const { prompt, resume } = req.body;
 
   const session = sessions.get(id);
   const agent = agents.get(id);
@@ -122,10 +128,12 @@ app.post('/agent/:id/query', async (req: Request<{ id: string }, {}, QueryReques
     return;
   }
 
-  console.log(`[Server] Query: ${id.slice(0, 8)} - "${prompt.slice(0, 50)}..."`);
+  const resumeSession = resume && session.canResume;
+  console.log(`[Server] Query: ${id.slice(0, 8)} - "${prompt.slice(0, 50)}..." (resume: ${resumeSession})`);
 
   // Start agent (async, returns immediately)
-  agent.runQuery(prompt);
+  // Pass resume flag to runQuery for both RealAgent and MockAgent
+  agent.runQuery(prompt, resumeSession);
 
   res.json({ status: 'processing' });
 });
@@ -144,6 +152,26 @@ app.get('/agent/:id/status', (req: Request<{ id: string }>, res: Response<Status
     id: session.id,
     status: session.status,
     config: session.config,
+  });
+});
+
+// GET /agent/:id/session - Get session info for resume
+app.get('/agent/:id/session', (req: Request<{ id: string }>, res: Response<SessionResponse | { error: string }>) => {
+  const { id } = req.params;
+  const session = sessions.get(id);
+
+  if (!session) {
+    res.status(404).json({ error: 'Agent not found' });
+    return;
+  }
+
+  res.json({
+    id: session.id,
+    sdkSessionId: session.sdkSessionId,
+    canResume: session.canResume,
+    inputTokens: session.inputTokens,
+    outputTokens: session.outputTokens,
+    totalCostUsd: session.totalCostUsd,
   });
 });
 

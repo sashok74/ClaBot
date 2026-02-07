@@ -12,12 +12,16 @@ export class RealAgent {
   private totalCostUsd: number = 0;
   // Track tool_use_id -> tool_name for proper tool_end events
   private activeTools: Map<string, string> = new Map();
+  // Track tool_use_id -> input for including input in tool_end events
+  private activeToolInputs: Map<string, unknown> = new Map();
+  // Track tool_use_id -> start time for duration calculation
+  private toolStartTimes: Map<string, number> = new Map();
 
   constructor(session: AgentSession) {
     this.session = session;
   }
 
-  async runQuery(prompt: string): Promise<void> {
+  async runQuery(prompt: string, resume: boolean = false): Promise<void> {
     this.startTime = Date.now();
     this.session.status = 'running';
     this.abortController = new AbortController();
@@ -67,6 +71,12 @@ export class RealAgent {
         options.maxTurns = this.session.config.maxTurns;
       }
 
+      // Resume existing session if requested and available
+      if (resume && this.session.sdkSessionId) {
+        options.resume = this.session.sdkSessionId;
+        console.log(`[RealAgent] Resuming session: ${this.session.sdkSessionId}`);
+      }
+
       // Run the agent query
       this.queryInstance = query({
         prompt,
@@ -98,15 +108,36 @@ export class RealAgent {
   }
 
   private processMessage(message: any): void {
+    // Debug: show all message types and session_id presence
+    console.log(`[RealAgent] Message: type=${message.type}, subtype=${message.subtype || '-'}, has_session_id=${!!message.session_id}`);
+
+    // ===== FIX: Capture session_id from the FIRST message that has it =====
+    if (message.session_id && !this.session.sdkSessionId) {
+      this.session.sdkSessionId = message.session_id;
+      this.session.canResume = true;
+      console.log(`[RealAgent] Session ID captured: ${message.session_id}`);
+      this.emit({
+        type: 'session_info',
+        sdkSessionId: message.session_id,
+        canResume: true,
+      });
+    }
+    // ======================================================================
+
     // Track usage from result messages
     if (message.type === 'result') {
       if (message.usage) {
         this.inputTokens = message.usage.inputTokens || 0;
         this.outputTokens = message.usage.outputTokens || 0;
+        // Update session usage stats
+        this.session.inputTokens = this.inputTokens;
+        this.session.outputTokens = this.outputTokens;
       }
       if (message.total_cost_usd) {
         this.totalCostUsd = message.total_cost_usd;
+        this.session.totalCostUsd = this.totalCostUsd;
       }
+      // session_id is now captured at the start of processMessage
       return;
     }
 
@@ -161,8 +192,10 @@ export class RealAgent {
           });
         }
       } else if (block.type === 'tool_use') {
-        // Track tool name for later tool_end event
+        // Track tool name and input for later tool_end event
         this.activeTools.set(block.id, block.name);
+        this.activeToolInputs.set(block.id, block.input);
+        this.toolStartTimes.set(block.id, Date.now());
 
         // Tool call starting
         this.emit({
@@ -186,8 +219,16 @@ export class RealAgent {
         // Tool completed
         const toolUseId = block.tool_use_id || '';
         const toolName = this.activeTools.get(toolUseId) || 'unknown';
-        this.activeTools.delete(toolUseId);
+        const toolInput = this.activeToolInputs.get(toolUseId);
+        const startTime = this.toolStartTimes.get(toolUseId) || Date.now();
+        const durationMs = Date.now() - startTime;
 
+        // Clean up tracking maps
+        this.activeTools.delete(toolUseId);
+        this.activeToolInputs.delete(toolUseId);
+        this.toolStartTimes.delete(toolUseId);
+
+        // Parse output - keep full content, no truncation
         const output = typeof block.content === 'string'
           ? block.content
           : JSON.stringify(block.content);
@@ -195,9 +236,10 @@ export class RealAgent {
         this.emit({
           type: 'tool_end',
           tool: toolName,
-          output: block.is_error ? { error: output } : { result: output.substring(0, 500) },
+          input: toolInput,  // Include original input
+          output: block.is_error ? { error: output } : { result: output },  // Full output, no truncation
           toolUseId: toolUseId || uuidv4(),
-          durationMs: 0, // SDK doesn't provide duration
+          durationMs,  // Calculated duration
         });
       }
     }
@@ -206,6 +248,7 @@ export class RealAgent {
   private processSystemMessage(message: any): void {
     if (message.subtype === 'init') {
       console.log(`[RealAgent] Initialized with model: ${message.model}`);
+      // session_id is now captured at the start of processMessage
     }
   }
 

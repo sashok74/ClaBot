@@ -36,7 +36,7 @@ export class MockAgent {
   }
 
   // Start generating mock events
-  async runQuery(prompt: string): Promise<void> {
+  async runQuery(prompt: string, resume: boolean = false): Promise<void> {
     this.eventIndex = 0;
     this.startTime = Date.now();
     this.session.status = 'running';
@@ -47,6 +47,21 @@ export class MockAgent {
       sessionId: this.session.id,
       config: this.session.config,
     });
+
+    // Generate mock SDK session ID (simulates what real SDK does)
+    if (!this.session.sdkSessionId) {
+      const mockSdkSessionId = `mock-session-${uuidv4()}`;
+      this.session.sdkSessionId = mockSdkSessionId;
+      this.session.canResume = true;
+      console.log(`[MockAgent] Session ID captured: ${mockSdkSessionId}`);
+      this.emit({
+        type: 'session_info',
+        sdkSessionId: mockSdkSessionId,
+        canResume: true,
+      });
+    } else if (resume) {
+      console.log(`[MockAgent] Resuming session: ${this.session.sdkSessionId}`);
+    }
 
     // Send user message
     this.emit({
@@ -89,6 +104,7 @@ export class MockAgent {
         event = {
           type: 'tool_end',
           tool: template.tool || 'unknown',
+          input: template.input,
           output: template.output,
           toolUseId: uuidv4(),
           durationMs: template.durationMs || 0,

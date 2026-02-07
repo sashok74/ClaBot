@@ -65,26 +65,36 @@ inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
     // ui_get_events - Get list of events
     server.RegisterLambda(
         "ui_get_events",
-        "Get list of all events from the events list. Returns array of {time, type, data} objects",
+        "Get list of all events from the events list. Returns array of {time, type, data, toolInput, toolOutput, toolUseId, requestId, durationMs} objects",
         TMcpToolSchema()
             .AddInteger("limit", "Maximum number of events to return (0 = all, default 100)")
-            .AddInteger("offset", "Skip first N events (default 0)"),
+            .AddInteger("offset", "Skip first N events (default 0)")
+            .AddBoolean("include_details", "Include full tool input/output (default false)", false),
         [form](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
             if (!form)
                 return TMcpToolResult::Error("Form not initialized");
 
             int limit = TMcpToolBase::GetInt(args, "limit", 100);
             int offset = TMcpToolBase::GetInt(args, "offset", 0);
+            bool includeDetails = TMcpToolBase::GetBool(args, "include_details", false);
 
             json events = json::array();
             SyncCall([&]() {
                 auto eventList = form->GetEvents(limit, offset);
                 for (const auto &ev : eventList) {
-                    events.push_back(json{
+                    json eventJson = {
                         {"time", utf8(ev.Time)},
                         {"type", utf8(ev.Type)},
                         {"data", utf8(ev.Data)}
-                    });
+                    };
+                    if (includeDetails) {
+                        eventJson["toolInput"] = utf8(ev.ToolInput);
+                        eventJson["toolOutput"] = utf8(ev.ToolOutput);
+                        eventJson["toolUseId"] = utf8(ev.ToolUseId);
+                        eventJson["requestId"] = utf8(ev.RequestId);
+                        eventJson["durationMs"] = ev.DurationMs;
+                    }
+                    events.push_back(eventJson);
                 }
             });
 
@@ -365,6 +375,16 @@ inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
                     {"eventsCount", form->GetEventCount()}
                 };
 
+                // Session info
+                result["session"] = json{
+                    {"sdkSessionId", utf8(form->GetSdkSessionId())},
+                    {"canResume", form->GetCanResume()},
+                    {"resumeMode", form->GetResumeMode()},
+                    {"inputTokens", form->GetInputTokens()},
+                    {"outputTokens", form->GetOutputTokens()},
+                    {"totalCostUsd", form->GetTotalCostUsd()}
+                };
+
                 // Recent events
                 json events = json::array();
                 auto eventList = form->GetEvents(eventsLimit, 0);
@@ -376,6 +396,83 @@ inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
                     });
                 }
                 result["recentEvents"] = events;
+            });
+
+            return TMcpToolResult::Success(result);
+        }
+    );
+
+    // ui_get_session - Get session info for resume
+    server.RegisterLambda(
+        "ui_get_session",
+        "Get session information including SDK session ID, resume capability, token usage, and cost",
+        TMcpToolSchema(),
+        [form](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
+            if (!form)
+                return TMcpToolResult::Error("Form not initialized");
+
+            json result;
+            SyncCall([&]() {
+                result["sdkSessionId"] = utf8(form->GetSdkSessionId());
+                result["canResume"] = form->GetCanResume();
+                result["resumeMode"] = form->GetResumeMode();
+                result["inputTokens"] = form->GetInputTokens();
+                result["outputTokens"] = form->GetOutputTokens();
+                result["totalCostUsd"] = form->GetTotalCostUsd();
+            });
+            return TMcpToolResult::Success(result);
+        }
+    );
+
+    // ui_set_resume_mode - Set resume mode on/off
+    server.RegisterLambda(
+        "ui_set_resume_mode",
+        "Enable or disable session resume mode. When enabled and session supports it, subsequent queries will continue the same session",
+        TMcpToolSchema()
+            .AddBoolean("resume", "true to continue existing session, false to start new session", true),
+        [form](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
+            if (!form)
+                return TMcpToolResult::Error("Form not initialized");
+
+            bool resume = TMcpToolBase::GetBool(args, "resume", false);
+
+            SyncCall([&]() {
+                form->SetResumeMode(resume);
+            });
+
+            json result;
+            result["set"] = true;
+            result["resumeMode"] = resume;
+            result["canResume"] = form->GetCanResume();
+            return TMcpToolResult::Success(result);
+        }
+    );
+
+    // ui_get_event_details - Get full details of an event by index
+    server.RegisterLambda(
+        "ui_get_event_details",
+        "Get full details of a specific event by index, including tool input/output JSON",
+        TMcpToolSchema()
+            .AddInteger("index", "Event index (0-based)", true),
+        [form](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
+            if (!form)
+                return TMcpToolResult::Error("Form not initialized");
+
+            int index = TMcpToolBase::GetInt(args, "index", -1);
+            if (index < 0)
+                return TMcpToolResult::Error("Invalid index");
+
+            json result;
+            SyncCall([&]() {
+                auto ev = form->GetEventDetails(index);
+                result["time"] = utf8(ev.Time);
+                result["type"] = utf8(ev.Type);
+                result["data"] = utf8(ev.Data);
+                result["toolInput"] = utf8(ev.ToolInput);
+                result["toolOutput"] = utf8(ev.ToolOutput);
+                result["toolUseId"] = utf8(ev.ToolUseId);
+                result["requestId"] = utf8(ev.RequestId);
+                result["durationMs"] = ev.DurationMs;
             });
 
             return TMcpToolResult::Success(result);
