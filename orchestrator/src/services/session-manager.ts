@@ -6,8 +6,10 @@ import { MAX_SESSIONS } from '../config';
 export class SessionManager {
   private sessions = new Map<string, AgentSession>();
 
-  create(req: CreateAgentRequest): AgentSession {
-    this.evictIfNeeded();
+  create(req: CreateAgentRequest): AgentSession | null {
+    if (this.sessions.size >= MAX_SESSIONS && !this.findEvictable()) {
+      return null;
+    }
 
     const id = uuidv4();
     const session: AgentSession = {
@@ -36,10 +38,25 @@ export class SessionManager {
     return session;
   }
 
-  private evictIfNeeded(): void {
-    if (this.sessions.size < MAX_SESSIONS) return;
+  /**
+   * Evict the oldest completed/error session.
+   * Returns the evicted session id, or null if nothing to evict.
+   */
+  evict(): string | null {
+    const oldest = this.findEvictable();
+    if (oldest) {
+      this.sessions.delete(oldest.id);
+      console.log(`[SessionManager] Evicted session: ${oldest.id.slice(0, 8)} (${oldest.status})`);
+      return oldest.id;
+    }
+    return null;
+  }
 
-    // Find oldest completed or error session
+  get size(): number {
+    return this.sessions.size;
+  }
+
+  private findEvictable(): AgentSession | null {
     let oldest: AgentSession | null = null;
     for (const session of this.sessions.values()) {
       if (session.status === 'completed' || session.status === 'error') {
@@ -48,10 +65,7 @@ export class SessionManager {
         }
       }
     }
-    if (oldest) {
-      this.sessions.delete(oldest.id);
-      console.log(`[SessionManager] Evicted session: ${oldest.id.slice(0, 8)} (${oldest.status})`);
-    }
+    return oldest;
   }
 
   get(id: string): AgentSession | undefined {

@@ -8,6 +8,7 @@ import {
   SessionResponse,
 } from '../types/api';
 import { AgentEvent } from '../types/domain';
+import { MAX_SESSIONS } from '../config';
 import { SessionManager } from '../services/session-manager';
 import { AgentFactory } from '../services/agent-factory';
 import { EventBus } from '../services/event-bus';
@@ -49,7 +50,24 @@ export function registerAgentRoutes(
     }
 
     body.name = body.name.trim();
+
+    // Evict oldest finished session if at capacity
+    if (sessionManager.size >= MAX_SESSIONS) {
+      const evictedId = sessionManager.evict();
+      if (evictedId) {
+        agentFactory.delete(evictedId);
+        eventBus.removeAll(evictedId);
+      } else {
+        res.status(503).json({ error: `Maximum sessions (${MAX_SESSIONS}) reached, all still active` } as any);
+        return;
+      }
+    }
+
     const session = sessionManager.create(body);
+    if (!session) {
+      res.status(503).json({ error: `Maximum sessions (${MAX_SESSIONS}) reached` } as any);
+      return;
+    }
     agentFactory.create(session);
 
     console.log(`[Server] Created agent: ${session.id} (${session.config.name})`);
@@ -79,7 +97,7 @@ export function registerAgentRoutes(
 
     const listener = (event: AgentEvent) => {
       res.write(`data: ${JSON.stringify(event)}\n\n`);
-      if (event.type === 'session_end') {
+      if (event.type === 'session_end' && event.reason === 'deleted') {
         res.end();
       }
     };
