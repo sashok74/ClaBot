@@ -1,47 +1,28 @@
 import { query, Query } from '@anthropic-ai/claude-agent-sdk';
 import { v4 as uuidv4 } from 'uuid';
-import { AgentEvent, AgentSession, UsageStats } from './types';
+import { AgentSession } from '../types/domain';
+import { EventBus } from '../services/event-bus';
+import { ToolTracker } from '../services/tool-tracker';
+import { BaseAgent } from './base-agent';
 
-export class RealAgent {
-  private session: AgentSession;
+export class RealAgent extends BaseAgent {
   private abortController: AbortController | null = null;
   private queryInstance: Query | null = null;
-  private startTime: number = 0;
-  private inputTokens: number = 0;
-  private outputTokens: number = 0;
-  private totalCostUsd: number = 0;
-  // Track tool_use_id -> tool_name for proper tool_end events
-  private activeTools: Map<string, string> = new Map();
-  // Track tool_use_id -> input for including input in tool_end events
-  private activeToolInputs: Map<string, unknown> = new Map();
-  // Track tool_use_id -> start time for duration calculation
-  private toolStartTimes: Map<string, number> = new Map();
+  private toolTracker = new ToolTracker();
 
-  constructor(session: AgentSession) {
-    this.session = session;
+  constructor(session: AgentSession, eventBus: EventBus) {
+    super(session, eventBus);
   }
 
   async runQuery(prompt: string, resume: boolean = false): Promise<void> {
-    this.startTime = Date.now();
+    this.usageTracker.start();
     this.session.status = 'running';
     this.abortController = new AbortController();
 
-    // Emit session start
-    this.emit({
-      type: 'session_start',
-      sessionId: this.session.id,
-      config: this.session.config,
-    });
-
-    // Emit user message
-    this.emit({
-      type: 'user_message',
-      content: prompt,
-      uuid: uuidv4(),
-    });
+    this.emitSessionStart();
+    this.emitUserMessage(prompt);
 
     try {
-      // Map our model names to SDK model names
       const modelMap: Record<string, string> = {
         'sonnet': 'claude-sonnet-4-20250514',
         'opus': 'claude-opus-4-20250514',
@@ -50,14 +31,18 @@ export class RealAgent {
 
       const model = modelMap[this.session.config.model || 'sonnet'] || 'claude-sonnet-4-20250514';
 
-      // Build options for SDK
-      const options: any = {
+      const permMode = this.session.config.permissionMode || 'bypassPermissions';
+
+      const options: Record<string, unknown> = {
         model,
         cwd: this.session.config.cwd || process.cwd(),
         abortController: this.abortController,
-        permissionMode: 'bypassPermissions' as const,
-        allowDangerouslySkipPermissions: true,
+        permissionMode: permMode,
       };
+
+      if (permMode === 'bypassPermissions') {
+        options.allowDangerouslySkipPermissions = true;
+      }
 
       if (this.session.config.systemPrompt) {
         options.systemPrompt = this.session.config.systemPrompt;
@@ -67,17 +52,27 @@ export class RealAgent {
         options.allowedTools = this.session.config.allowedTools;
       }
 
+      if (this.session.config.disallowedTools && this.session.config.disallowedTools.length > 0) {
+        options.disallowedTools = this.session.config.disallowedTools;
+      }
+
       if (this.session.config.maxTurns) {
         options.maxTurns = this.session.config.maxTurns;
       }
 
-      // Resume existing session if requested and available
+      if (this.session.config.maxBudgetUsd) {
+        options.maxBudgetUsd = this.session.config.maxBudgetUsd;
+      }
+
+      if (this.session.config.mcpServers) {
+        options.mcpServers = this.session.config.mcpServers;
+      }
+
       if (resume && this.session.sdkSessionId) {
         options.resume = this.session.sdkSessionId;
         console.log(`[RealAgent] Resuming session: ${this.session.sdkSessionId}`);
       }
 
-      // Run the agent query
       this.queryInstance = query({
         prompt,
         options,
@@ -87,14 +82,11 @@ export class RealAgent {
         this.processMessage(message);
       }
 
-      // If we completed normally
       this.complete('completed');
     } catch (error: any) {
       if (error.name === 'AbortError') {
-        // Interrupted by user
         this.complete('interrupted');
       } else {
-        // Real error
         console.error('[RealAgent] Error:', error);
         this.emit({
           type: 'error',
@@ -104,40 +96,30 @@ export class RealAgent {
       }
     } finally {
       this.queryInstance = null;
+      this.toolTracker.cleanup();
     }
   }
 
   private processMessage(message: any): void {
-    // Debug: show all message types and session_id presence
     console.log(`[RealAgent] Message: type=${message.type}, subtype=${message.subtype || '-'}, has_session_id=${!!message.session_id}`);
 
-    // ===== FIX: Capture session_id from the FIRST message that has it =====
+    // Capture session_id from the FIRST message that has it
     if (message.session_id && !this.session.sdkSessionId) {
-      this.session.sdkSessionId = message.session_id;
-      this.session.canResume = true;
-      console.log(`[RealAgent] Session ID captured: ${message.session_id}`);
-      this.emit({
-        type: 'session_info',
-        sdkSessionId: message.session_id,
-        canResume: true,
-      });
+      this.emitSessionInfo(message.session_id);
     }
-    // ======================================================================
 
     // Track usage from result messages
     if (message.type === 'result') {
       if (message.usage) {
-        this.inputTokens = message.usage.inputTokens || 0;
-        this.outputTokens = message.usage.outputTokens || 0;
-        // Update session usage stats
-        this.session.inputTokens = this.inputTokens;
-        this.session.outputTokens = this.outputTokens;
+        this.usageTracker.update(
+          message.usage.inputTokens || 0,
+          message.usage.outputTokens || 0,
+        );
       }
       if (message.total_cost_usd) {
-        this.totalCostUsd = message.total_cost_usd;
-        this.session.totalCostUsd = this.totalCostUsd;
+        this.usageTracker.totalCostUsd = message.total_cost_usd;
       }
-      // session_id is now captured at the start of processMessage
+      this.syncUsageToSession();
       return;
     }
 
@@ -145,23 +127,15 @@ export class RealAgent {
       case 'assistant':
         this.processAssistantMessage(message);
         break;
-
       case 'user':
-        // Tool results come as user messages
         this.processUserMessage(message);
         break;
-
       case 'system':
-        // System messages (init, status, etc.)
         this.processSystemMessage(message);
         break;
-
       case 'tool_progress':
-        // Tool is still running
         break;
-
       default:
-        // Log unknown message types for debugging
         console.log(`[RealAgent] Message type: ${message.type}`);
     }
   }
@@ -171,13 +145,11 @@ export class RealAgent {
 
     for (const block of message.message.content) {
       if (block.type === 'thinking') {
-        // Extended thinking block
         this.emit({
           type: 'thinking',
           content: block.thinking || '',
         });
       } else if (block.type === 'text') {
-        // Could be thinking-like or actual response
         const text = block.text || '';
         if (this.looksLikeThinking(text)) {
           this.emit({
@@ -192,12 +164,7 @@ export class RealAgent {
           });
         }
       } else if (block.type === 'tool_use') {
-        // Track tool name and input for later tool_end event
-        this.activeTools.set(block.id, block.name);
-        this.activeToolInputs.set(block.id, block.input);
-        this.toolStartTimes.set(block.id, Date.now());
-
-        // Tool call starting
+        this.toolTracker.trackStart(block.id, block.name, block.input);
         this.emit({
           type: 'tool_start',
           tool: block.name,
@@ -216,19 +183,9 @@ export class RealAgent {
 
     for (const block of content) {
       if (block.type === 'tool_result') {
-        // Tool completed
         const toolUseId = block.tool_use_id || '';
-        const toolName = this.activeTools.get(toolUseId) || 'unknown';
-        const toolInput = this.activeToolInputs.get(toolUseId);
-        const startTime = this.toolStartTimes.get(toolUseId) || Date.now();
-        const durationMs = Date.now() - startTime;
+        const { toolName, input: toolInput, durationMs } = this.toolTracker.resolve(toolUseId);
 
-        // Clean up tracking maps
-        this.activeTools.delete(toolUseId);
-        this.activeToolInputs.delete(toolUseId);
-        this.toolStartTimes.delete(toolUseId);
-
-        // Parse output - keep full content, no truncation
         const output = typeof block.content === 'string'
           ? block.content
           : JSON.stringify(block.content);
@@ -236,10 +193,10 @@ export class RealAgent {
         this.emit({
           type: 'tool_end',
           tool: toolName,
-          input: toolInput,  // Include original input
-          output: block.is_error ? { error: output } : { result: output },  // Full output, no truncation
+          input: toolInput,
+          output: block.is_error ? { error: output } : { result: output },
           toolUseId: toolUseId || uuidv4(),
-          durationMs,  // Calculated duration
+          durationMs,
         });
       }
     }
@@ -248,42 +205,15 @@ export class RealAgent {
   private processSystemMessage(message: any): void {
     if (message.subtype === 'init') {
       console.log(`[RealAgent] Initialized with model: ${message.model}`);
-      // session_id is now captured at the start of processMessage
     }
   }
 
   private looksLikeThinking(text: string): boolean {
-    // Heuristic: if it starts with common thinking patterns
     const thinkingPatterns = [
       /^(Let me|I'll|I need to|First|Now|Looking at|Analyzing|Checking)/i,
       /^(Hmm|Okay|Alright|So,)/i,
     ];
     return thinkingPatterns.some(p => p.test(text.trim()));
-  }
-
-  private complete(reason: string): void {
-    this.session.status = reason === 'completed' ? 'completed' :
-                          reason === 'interrupted' ? 'interrupted' : 'error';
-
-    const usage: UsageStats = {
-      inputTokens: this.inputTokens,
-      outputTokens: this.outputTokens,
-      totalCostUsd: this.totalCostUsd || this.estimateCost(),
-      durationMs: Date.now() - this.startTime,
-    };
-
-    this.emit({
-      type: 'session_end',
-      reason,
-      usage,
-    });
-  }
-
-  private estimateCost(): number {
-    // Rough cost estimation (sonnet pricing)
-    const inputCost = (this.inputTokens / 1000000) * 3;  // $3 per 1M input
-    const outputCost = (this.outputTokens / 1000000) * 15; // $15 per 1M output
-    return inputCost + outputCost;
   }
 
   stop(): void {
@@ -297,17 +227,6 @@ export class RealAgent {
       this.queryInstance.interrupt().catch(err => {
         console.error('[RealAgent] Interrupt error:', err);
       });
-    }
-  }
-
-  private emit(event: AgentEvent): void {
-    console.log(`[${this.session.id.slice(0, 8)}] Event: ${event.type}`);
-    for (const listener of this.session.eventListeners) {
-      try {
-        listener(event);
-      } catch (err) {
-        console.error('Error in event listener:', err);
-      }
     }
   }
 }

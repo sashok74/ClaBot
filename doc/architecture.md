@@ -318,19 +318,33 @@ flowchart LR
 | Файл | Назначение |
 |------|------------|
 | `src/index.ts` | Entry point, инициализация и запуск сервера |
-| `src/server.ts` | Express routes, SSE endpoints, middleware |
-| `src/agent-manager.ts` | Класс AgentManager — управление сессиями агентов |
-| `src/types.ts` | TypeScript интерфейсы (AgentConfig, AgentEvent, etc.) |
-| `src/presets.ts` | Предустановленные профили агентов |
+| `src/config.ts` | Конфигурация приложения (порт, лимиты) |
+| `src/server.ts` | Express app factory, middleware |
+| `src/types/domain.ts` | Доменные типы (AgentConfig, AgentSession, AgentEvent, UsageStats) |
+| `src/types/api.ts` | HTTP Request/Response типы |
+| `src/agents/base-agent.ts` | Абстрактный базовый агент (emit, complete, usage sync) |
+| `src/agents/real-agent.ts` | Реальный агент через Claude Agent SDK |
+| `src/services/event-bus.ts` | Pub/sub событий по agentId |
+| `src/services/session-manager.ts` | CRUD сессий с ограничением по кол-ву |
+| `src/services/agent-factory.ts` | Фабрика агентов |
+| `src/services/tool-tracker.ts` | Отслеживание tool_use_id → имя/длительность |
+| `src/services/usage-tracker.ts` | Подсчёт токенов и стоимости |
+| `src/routes/agent-routes.ts` | Все /agent/* endpoints с валидацией |
+| `src/routes/health-routes.ts` | GET /health |
 
 ### UI (C++ Builder)
 
 | Файл | Назначение |
 |------|------------|
-| `uMain.cpp/h/dfm` | Главная форма TfrmMain с UI компонентами |
-| `uOrchestratorClient.cpp/h` | Класс TOrchestratorClient — HTTP/SSE клиент |
-| `uAgentConfig.cpp/h` | Класс TAgentConfig — конфигурация агента |
-| `uEventParser.cpp/h` | Парсинг JSON событий из SSE stream |
+| `uMain.cpp/h/dfm` | Главная форма TfrmMain : IAppState |
+| `uHttpClient.h` | HTTP клиент (Indy) |
+| `uSSEClient.h` | SSE клиент (Indy) |
+| `services/uEventStore.h` | Хранилище событий TEventStore |
+| `services/uSessionState.h` | Состояние сессии TSessionState |
+| `services/uEventParser.h` | Парсинг JSON событий из SSE stream |
+| `interfaces/uIAppState.h` | Абстрактный интерфейс IAppState |
+| `uMcpServer.cpp/h` | Встроенный MCP сервер |
+| `mcp/tools/UiTools.h` | MCP tool implementations |
 
 ---
 

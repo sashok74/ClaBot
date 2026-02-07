@@ -1,3 +1,12 @@
+// Permission modes for agent execution
+export type PermissionMode = 'default' | 'plan' | 'bypassPermissions';
+
+// MCP server configuration
+export interface McpServerConfig {
+  url: string;
+  [key: string]: unknown;
+}
+
 // Agent Configuration
 export interface AgentConfig {
   id: string;
@@ -8,19 +17,20 @@ export interface AgentConfig {
   disallowedTools?: string[];
   maxTurns?: number;
   maxBudgetUsd?: number;
+  permissionMode?: PermissionMode;
+  mcpServers?: Record<string, McpServerConfig>;
   cwd?: string;
 }
 
 // Agent Status
 export type AgentStatus = 'created' | 'idle' | 'running' | 'interrupted' | 'completed' | 'error';
 
-// Agent Session
+// Agent Session (no eventListeners — moved to EventBus)
 export interface AgentSession {
   id: string;
   config: AgentConfig;
   status: AgentStatus;
   createdAt: Date;
-  eventListeners: Set<(event: AgentEvent) => void>;
   // Session tracking for resume support
   sdkSessionId?: string;
   canResume: boolean;
@@ -31,6 +41,7 @@ export interface AgentSession {
 
 // SSE Events
 export type AgentEvent =
+  | { type: 'connected'; agentId: string }
   | { type: 'session_start'; sessionId: string; config: AgentConfig }
   | { type: 'session_info'; sdkSessionId: string; canResume: boolean }
   | { type: 'thinking'; content: string }
@@ -49,43 +60,4 @@ export interface UsageStats {
   outputTokens: number;
   totalCostUsd: number;
   durationMs: number;
-}
-
-// API Request/Response types
-export interface CreateAgentRequest {
-  name: string;
-  systemPrompt?: string;
-  model?: 'sonnet' | 'opus' | 'haiku';
-  allowedTools?: string[];
-  cwd?: string;
-}
-
-export interface CreateAgentResponse {
-  id: string;
-  status: AgentStatus;
-}
-
-export interface QueryRequest {
-  prompt: string;
-  resume?: boolean;  // Continue existing session instead of starting new
-}
-
-export interface QueryResponse {
-  status: 'processing' | 'error';
-  message?: string;
-}
-
-export interface StatusResponse {
-  id: string;
-  status: AgentStatus;
-  config: AgentConfig;
-}
-
-export interface SessionResponse {
-  id: string;
-  sdkSessionId?: string;
-  canResume: boolean;
-  inputTokens: number;
-  outputTokens: number;
-  totalCostUsd: number;
 }

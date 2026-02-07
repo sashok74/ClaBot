@@ -15,7 +15,7 @@
 #include "mcp/transport/http/HttpTransport.h"
 
 // Forward declaration
-class TfrmMain;
+class IAppState;
 
 //---------------------------------------------------------------------------
 // TUiMcpServer — MCP server for UI control
@@ -36,7 +36,7 @@ public:
     bool IsRunning() const;
 
     // Register UI tools (call after Start, before using)
-    void RegisterUiTools(TfrmMain *form);
+    void RegisterUiTools(IAppState *appState);
 
     // Get the MCP server (for additional tool registration)
     Mcp::TMcpServer* GetMcpServer() { return FMcpServer.get(); }

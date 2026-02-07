@@ -16,7 +16,7 @@
 //---------------------------------------------------------------------------
 #include "../McpServer.h"
 #include "UcodeUtf8.h"
-#include "../../uMain.h"
+#include "../../interfaces/uIAppState.h"
 #include <Vcl.Forms.hpp>
 #include <Vcl.StdCtrls.hpp>
 #include <Vcl.ComCtrls.hpp>
@@ -37,26 +37,25 @@ void SyncCall(Func func)
 //---------------------------------------------------------------------------
 // Register all UI tools with the MCP server
 // @param server The MCP server to register tools with
-// @param form Pointer to the main form (TfrmMain)
+// @param appState Pointer to the IAppState implementation
 //---------------------------------------------------------------------------
-inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
+inline void RegisterUiTools(TMcpServer &server, IAppState *appState)
 {
     // ui_get_status - Get general UI status
     server.RegisterLambda(
         "ui_get_status",
         "Get general status of the ClaBot UI: connection state, agent ID, events count, status bar text",
         TMcpToolSchema(),
-        [form](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
-            if (!form)
-                return TMcpToolResult::Error("Form not initialized");
+        [appState](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
+            if (!appState)
+                return TMcpToolResult::Error("App state not initialized");
 
             json result;
             SyncCall([&]() {
-                // Access form properties via public methods we'll add
-                result["connected"] = form->IsConnected();
-                result["agentId"] = utf8(form->GetAgentId());
-                result["eventsCount"] = form->GetEventCount();
-                result["statusText"] = utf8(form->GetStatusText());
+                result["connected"] = appState->IsConnected();
+                result["agentId"] = utf8(appState->GetAgentId());
+                result["eventsCount"] = appState->GetEventCount();
+                result["statusText"] = utf8(appState->GetStatusText());
             });
             return TMcpToolResult::Success(result);
         }
@@ -70,9 +69,9 @@ inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
             .AddInteger("limit", "Maximum number of events to return (0 = all, default 100)")
             .AddInteger("offset", "Skip first N events (default 0)")
             .AddBoolean("include_details", "Include full tool input/output (default false)", false),
-        [form](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
-            if (!form)
-                return TMcpToolResult::Error("Form not initialized");
+        [appState](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
+            if (!appState)
+                return TMcpToolResult::Error("App state not initialized");
 
             int limit = TMcpToolBase::GetInt(args, "limit", 100);
             int offset = TMcpToolBase::GetInt(args, "offset", 0);
@@ -80,7 +79,7 @@ inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
 
             json events = json::array();
             SyncCall([&]() {
-                auto eventList = form->GetEvents(limit, offset);
+                auto eventList = appState->GetEvents(limit, offset);
                 for (const auto &ev : eventList) {
                     json eventJson = {
                         {"time", utf8(ev.Time)},
@@ -100,7 +99,7 @@ inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
 
             json result;
             result["events"] = events;
-            result["total"] = form->GetEventCount();
+            result["total"] = appState->GetEventCount();
             return TMcpToolResult::Success(result);
         }
     );
@@ -110,21 +109,21 @@ inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
         "ui_get_controls",
         "Get state of all UI controls: server URL, agent name, prompt, and button states (enabled/disabled)",
         TMcpToolSchema(),
-        [form](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
-            if (!form)
-                return TMcpToolResult::Error("Form not initialized");
+        [appState](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
+            if (!appState)
+                return TMcpToolResult::Error("App state not initialized");
 
             json result;
             SyncCall([&]() {
-                result["serverUrl"] = utf8(form->GetServerUrl());
-                result["agentName"] = utf8(form->GetAgentName());
-                result["agentId"] = utf8(form->GetAgentId());
-                result["prompt"] = utf8(form->GetPrompt());
+                result["serverUrl"] = utf8(appState->GetServerUrl());
+                result["agentName"] = utf8(appState->GetAgentName());
+                result["agentId"] = utf8(appState->GetAgentId());
+                result["prompt"] = utf8(appState->GetPrompt());
                 result["buttons"] = json{
-                    {"connect", json{{"enabled", form->IsConnectEnabled()}}},
-                    {"createAgent", json{{"enabled", form->IsCreateAgentEnabled()}}},
-                    {"send", json{{"enabled", form->IsSendEnabled()}}},
-                    {"stop", json{{"enabled", form->IsStopEnabled()}}}
+                    {"connect", json{{"enabled", appState->IsConnectEnabled()}}},
+                    {"createAgent", json{{"enabled", appState->IsCreateAgentEnabled()}}},
+                    {"send", json{{"enabled", appState->IsSendEnabled()}}},
+                    {"stop", json{{"enabled", appState->IsStopEnabled()}}}
                 };
             });
             return TMcpToolResult::Success(result);
@@ -136,14 +135,14 @@ inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
         "ui_click_connect",
         "Click the Connect button to connect to the orchestrator server",
         TMcpToolSchema(),
-        [form](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
-            if (!form)
-                return TMcpToolResult::Error("Form not initialized");
+        [appState](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
+            if (!appState)
+                return TMcpToolResult::Error("App state not initialized");
 
             bool clicked = false;
             SyncCall([&]() {
-                if (form->IsConnectEnabled()) {
-                    form->ClickConnect();
+                if (appState->IsConnectEnabled()) {
+                    appState->ClickConnect();
                     clicked = true;
                 }
             });
@@ -160,14 +159,14 @@ inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
         "ui_click_create_agent",
         "Click the Create Agent button to create a new agent session",
         TMcpToolSchema(),
-        [form](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
-            if (!form)
-                return TMcpToolResult::Error("Form not initialized");
+        [appState](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
+            if (!appState)
+                return TMcpToolResult::Error("App state not initialized");
 
             bool clicked = false;
             SyncCall([&]() {
-                if (form->IsCreateAgentEnabled()) {
-                    form->ClickCreateAgent();
+                if (appState->IsCreateAgentEnabled()) {
+                    appState->ClickCreateAgent();
                     clicked = true;
                 }
             });
@@ -184,14 +183,14 @@ inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
         "ui_click_send",
         "Click the Send button to send the current prompt to the agent",
         TMcpToolSchema(),
-        [form](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
-            if (!form)
-                return TMcpToolResult::Error("Form not initialized");
+        [appState](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
+            if (!appState)
+                return TMcpToolResult::Error("App state not initialized");
 
             bool clicked = false;
             SyncCall([&]() {
-                if (form->IsSendEnabled()) {
-                    form->ClickSend();
+                if (appState->IsSendEnabled()) {
+                    appState->ClickSend();
                     clicked = true;
                 }
             });
@@ -208,14 +207,14 @@ inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
         "ui_click_stop",
         "Click the Stop button to interrupt the current agent execution",
         TMcpToolSchema(),
-        [form](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
-            if (!form)
-                return TMcpToolResult::Error("Form not initialized");
+        [appState](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
+            if (!appState)
+                return TMcpToolResult::Error("App state not initialized");
 
             bool clicked = false;
             SyncCall([&]() {
-                if (form->IsStopEnabled()) {
-                    form->ClickStop();
+                if (appState->IsStopEnabled()) {
+                    appState->ClickStop();
                     clicked = true;
                 }
             });
@@ -233,16 +232,16 @@ inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
         "Set the orchestrator server URL",
         TMcpToolSchema()
             .AddString("url", "The server URL (e.g., http://localhost:3000)", true),
-        [form](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
-            if (!form)
-                return TMcpToolResult::Error("Form not initialized");
+        [appState](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
+            if (!appState)
+                return TMcpToolResult::Error("App state not initialized");
 
             std::string url = TMcpToolBase::GetString(args, "url");
             if (url.empty())
                 return TMcpToolResult::Error("URL is required");
 
             SyncCall([&]() {
-                form->SetServerUrl(u(url));
+                appState->SetServerUrl(u(url));
             });
 
             return TMcpToolResult::Success(json{{"set", true}, {"url", url}});
@@ -255,16 +254,16 @@ inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
         "Set the name for the agent to be created",
         TMcpToolSchema()
             .AddString("name", "The agent name", true),
-        [form](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
-            if (!form)
-                return TMcpToolResult::Error("Form not initialized");
+        [appState](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
+            if (!appState)
+                return TMcpToolResult::Error("App state not initialized");
 
             std::string name = TMcpToolBase::GetString(args, "name");
             if (name.empty())
                 return TMcpToolResult::Error("Name is required");
 
             SyncCall([&]() {
-                form->SetAgentName(u(name));
+                appState->SetAgentName(u(name));
             });
 
             return TMcpToolResult::Success(json{{"set", true}, {"name", name}});
@@ -277,14 +276,14 @@ inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
         "Set the prompt text to send to the agent",
         TMcpToolSchema()
             .AddString("text", "The prompt text", true),
-        [form](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
-            if (!form)
-                return TMcpToolResult::Error("Form not initialized");
+        [appState](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
+            if (!appState)
+                return TMcpToolResult::Error("App state not initialized");
 
             std::string text = TMcpToolBase::GetString(args, "text");
 
             SyncCall([&]() {
-                form->SetPrompt(u(text));
+                appState->SetPrompt(u(text));
             });
 
             return TMcpToolResult::Success(json{{"set", true}, {"text", text}});
@@ -298,9 +297,9 @@ inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
         TMcpToolSchema()
             .AddInteger("count", "Minimum number of events to wait for", true)
             .AddInteger("timeout_ms", "Timeout in milliseconds (default 30000)", false),
-        [form](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
-            if (!form)
-                return TMcpToolResult::Error("Form not initialized");
+        [appState](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
+            if (!appState)
+                return TMcpToolResult::Error("App state not initialized");
 
             int targetCount = TMcpToolBase::GetInt(args, "count", 1);
             int timeoutMs = TMcpToolBase::GetInt(args, "timeout_ms", 30000);
@@ -310,7 +309,7 @@ inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
 
             while (true) {
                 SyncCall([&]() {
-                    currentCount = form->GetEventCount();
+                    currentCount = appState->GetEventCount();
                 });
 
                 if (currentCount >= targetCount) {
@@ -342,9 +341,9 @@ inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
         "Get complete state of the entire UI: all edit fields, all status bar panels, button states, and recent events",
         TMcpToolSchema()
             .AddInteger("events_limit", "Maximum events to include (default 10)", false),
-        [form](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
-            if (!form)
-                return TMcpToolResult::Error("Form not initialized");
+        [appState](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
+            if (!appState)
+                return TMcpToolResult::Error("App state not initialized");
 
             int eventsLimit = TMcpToolBase::GetInt(args, "events_limit", 10);
 
@@ -352,42 +351,42 @@ inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
             SyncCall([&]() {
                 // Edit fields
                 result["fields"] = json{
-                    {"serverUrl", utf8(form->GetServerUrl())},
-                    {"agentName", utf8(form->GetAgentName())},
-                    {"agentId", utf8(form->GetAgentId())},
-                    {"prompt", utf8(form->GetPrompt())}
+                    {"serverUrl", utf8(appState->GetServerUrl())},
+                    {"agentName", utf8(appState->GetAgentName())},
+                    {"agentId", utf8(appState->GetAgentId())},
+                    {"prompt", utf8(appState->GetPrompt())}
                 };
 
                 // Status bar panels
-                result["statusBar"] = form->GetStatusBarPanels();
+                result["statusBar"] = appState->GetStatusBarPanels();
 
                 // Button states
                 result["buttons"] = json{
-                    {"connect", form->IsConnectEnabled()},
-                    {"createAgent", form->IsCreateAgentEnabled()},
-                    {"send", form->IsSendEnabled()},
-                    {"stop", form->IsStopEnabled()}
+                    {"connect", appState->IsConnectEnabled()},
+                    {"createAgent", appState->IsCreateAgentEnabled()},
+                    {"send", appState->IsSendEnabled()},
+                    {"stop", appState->IsStopEnabled()}
                 };
 
                 // Internal state
                 result["state"] = json{
-                    {"connected", form->IsConnected()},
-                    {"eventsCount", form->GetEventCount()}
+                    {"connected", appState->IsConnected()},
+                    {"eventsCount", appState->GetEventCount()}
                 };
 
                 // Session info
                 result["session"] = json{
-                    {"sdkSessionId", utf8(form->GetSdkSessionId())},
-                    {"canResume", form->GetCanResume()},
-                    {"resumeMode", form->GetResumeMode()},
-                    {"inputTokens", form->GetInputTokens()},
-                    {"outputTokens", form->GetOutputTokens()},
-                    {"totalCostUsd", form->GetTotalCostUsd()}
+                    {"sdkSessionId", utf8(appState->GetSdkSessionId())},
+                    {"canResume", appState->GetCanResume()},
+                    {"resumeMode", appState->GetResumeMode()},
+                    {"inputTokens", appState->GetInputTokens()},
+                    {"outputTokens", appState->GetOutputTokens()},
+                    {"totalCostUsd", appState->GetTotalCostUsd()}
                 };
 
                 // Recent events
                 json events = json::array();
-                auto eventList = form->GetEvents(eventsLimit, 0);
+                auto eventList = appState->GetEvents(eventsLimit, 0);
                 for (const auto &ev : eventList) {
                     events.push_back(json{
                         {"time", utf8(ev.Time)},
@@ -407,18 +406,18 @@ inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
         "ui_get_session",
         "Get session information including SDK session ID, resume capability, token usage, and cost",
         TMcpToolSchema(),
-        [form](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
-            if (!form)
-                return TMcpToolResult::Error("Form not initialized");
+        [appState](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
+            if (!appState)
+                return TMcpToolResult::Error("App state not initialized");
 
             json result;
             SyncCall([&]() {
-                result["sdkSessionId"] = utf8(form->GetSdkSessionId());
-                result["canResume"] = form->GetCanResume();
-                result["resumeMode"] = form->GetResumeMode();
-                result["inputTokens"] = form->GetInputTokens();
-                result["outputTokens"] = form->GetOutputTokens();
-                result["totalCostUsd"] = form->GetTotalCostUsd();
+                result["sdkSessionId"] = utf8(appState->GetSdkSessionId());
+                result["canResume"] = appState->GetCanResume();
+                result["resumeMode"] = appState->GetResumeMode();
+                result["inputTokens"] = appState->GetInputTokens();
+                result["outputTokens"] = appState->GetOutputTokens();
+                result["totalCostUsd"] = appState->GetTotalCostUsd();
             });
             return TMcpToolResult::Success(result);
         }
@@ -430,20 +429,20 @@ inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
         "Enable or disable session resume mode. When enabled and session supports it, subsequent queries will continue the same session",
         TMcpToolSchema()
             .AddBoolean("resume", "true to continue existing session, false to start new session", true),
-        [form](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
-            if (!form)
-                return TMcpToolResult::Error("Form not initialized");
+        [appState](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
+            if (!appState)
+                return TMcpToolResult::Error("App state not initialized");
 
             bool resume = TMcpToolBase::GetBool(args, "resume", false);
 
             SyncCall([&]() {
-                form->SetResumeMode(resume);
+                appState->SetResumeMode(resume);
             });
 
             json result;
             result["set"] = true;
             result["resumeMode"] = resume;
-            result["canResume"] = form->GetCanResume();
+            result["canResume"] = appState->GetCanResume();
             return TMcpToolResult::Success(result);
         }
     );
@@ -454,9 +453,9 @@ inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
         "Get full details of a specific event by index, including tool input/output JSON",
         TMcpToolSchema()
             .AddInteger("index", "Event index (0-based)", true),
-        [form](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
-            if (!form)
-                return TMcpToolResult::Error("Form not initialized");
+        [appState](const json &args, TMcpToolContext &ctx) -> TMcpToolResult {
+            if (!appState)
+                return TMcpToolResult::Error("App state not initialized");
 
             int index = TMcpToolBase::GetInt(args, "index", -1);
             if (index < 0)
@@ -464,7 +463,7 @@ inline void RegisterUiTools(TMcpServer &server, TfrmMain *form)
 
             json result;
             SyncCall([&]() {
-                auto ev = form->GetEventDetails(index);
+                auto ev = appState->GetEventDetails(index);
                 result["time"] = utf8(ev.Time);
                 result["type"] = utf8(ev.Type);
                 result["data"] = utf8(ev.Data);

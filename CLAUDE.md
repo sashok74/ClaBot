@@ -58,9 +58,18 @@ Open `ui/ClaBot.cbproj` in RAD Studio 12+ and build from IDE.
 ## Running (Порядок запуска)
 
 ### 1. Запуск Orchestrator (фоновый режим)
+
+**Windows:** Claude Agent SDK запускает Claude Code CLI как subprocess, который требует git-bash. Перед запуском необходимо задать переменную окружения:
+
 ```bash
+export CLAUDE_CODE_GIT_BASH_PATH="C:\Tools\Git\bin\bash.exe"
 cd C:/RADProjects/ClaBot/orchestrator && npm run start
 ```
+
+> Путь к `bash.exe` может отличаться. Типичные варианты:
+> - `C:\Program Files\Git\bin\bash.exe`
+> - `C:\Tools\Git\bin\bash.exe`
+
 Сервер слушает на `localhost:3000`. Проверка: `curl http://localhost:3000/health`
 
 ### 2. Запуск UI

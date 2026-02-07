@@ -49,8 +49,8 @@
     </PropertyGroup>
     <PropertyGroup Condition="'$(Base)'!=''">
         <SanitizedProjectName>ClaBot</SanitizedProjectName>
-        <IncludePath>..\external;..\external\nlohmann;..\external\codeUtf8;mcp;mcp\transport;mcp\transport\http;$(IncludePath)</IncludePath>
-        <BCC_IncludePath>..\external;..\external\nlohmann;..\external\codeUtf8;mcp;mcp\transport;mcp\transport\http;$(BCC_IncludePath)</BCC_IncludePath>
+        <IncludePath>..\external;..\external\nlohmann;..\external\codeUtf8;mcp;mcp\transport;mcp\transport\http;services;interfaces;$(IncludePath)</IncludePath>
+        <BCC_IncludePath>..\external;..\external\nlohmann;..\external\codeUtf8;mcp;mcp\transport;mcp\transport\http;services;interfaces;$(BCC_IncludePath)</BCC_IncludePath>
         <DCC_Namespace>System;Xml;Data;Datasnap;Web;Soap;Vcl;Vcl.Imaging;Vcl.Touch;Vcl.Samples;Vcl.Shell;$(DCC_Namespace)</DCC_Namespace>
         <VerInfo_Keys>CompanyName=;FileDescription=$(MSBuildProjectName);FileVersion=1.0.0.0;InternalName=;LegalCopyright=;LegalTrademarks=;OriginalFilename=;ProgramID=;ProductName=$(MSBuildProjectName);ProductVersion=1.0.0.0;Comments=</VerInfo_Keys>
         <VerInfo_Locale>1033</VerInfo_Locale>

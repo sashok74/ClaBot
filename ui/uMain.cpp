@@ -3,16 +3,15 @@
 #pragma hdrstop
 #include "uMain.h"
 #include "uMcpServer.h"
+#include "services/uEventParser.h"
 //---------------------------------------------------------------------------
 #pragma package(smart_init)
 #pragma resource "*.dfm"
 TfrmMain *frmMain;
 //---------------------------------------------------------------------------
 __fastcall TfrmMain::TfrmMain(TComponent* Owner)
-    : TForm(Owner), FHttpClient(nullptr), FSSEClient(nullptr), FEventCount(0),
-      FConnected(false), FAgentCreated(false), FRunning(false),
-      FCanResume(false), FResumeMode(false), FInputTokens(0), FOutputTokens(0),
-      FTotalCostUsd(0.0), FSelectedEventIndex(-1)
+    : TForm(Owner), FHttpClient(nullptr), FSSEClient(nullptr),
+      FSelectedEventIndex(-1)
 {
 }
 //---------------------------------------------------------------------------
@@ -96,30 +95,25 @@ void __fastcall TfrmMain::btnCreateAgentClick(TObject *Sender)
 
         if (!response.is_discarded() && response.contains("id")) {
             std::string id = response["id"].get<std::string>();
-            FCurrentAgentId = u(id);
-            edtAgentId->Text = FCurrentAgentId;
+            FState.CurrentAgentId = u(id);
+            edtAgentId->Text = FState.CurrentAgentId;
 
             // Connect SSE
-            UnicodeString sseUrl = FHttpClient->BaseUrl + "/agent/" + FCurrentAgentId + "/events";
+            UnicodeString sseUrl = FHttpClient->BaseUrl + "/agent/" + FState.CurrentAgentId + "/events";
             FSSEClient->Connect(sseUrl);
 
             // Clear events
             lvEvents->Items->Clear();
-            FEventDataList.clear();
-            FEventCount = 0;
+            FEventStore.Clear();
             mmoDetails->Clear();
             FSelectedEventIndex = -1;
 
             // Reset session info
-            FSdkSessionId = "";
-            FCanResume = false;
-            FInputTokens = 0;
-            FOutputTokens = 0;
-            FTotalCostUsd = 0.0;
+            FState.Reset();
             UpdateSessionInfo();
 
             SetControlsState(true, true, false);
-            UpdateStatus("Agent created: " + FCurrentAgentId.SubString(1, 8) + "...");
+            UpdateStatus("Agent created: " + FState.CurrentAgentId.SubString(1, 8) + "...");
         }
     }
     catch (Exception &e) {
@@ -135,7 +129,7 @@ void __fastcall TfrmMain::btnSendClick(TObject *Sender)
         return;
     }
 
-    if (FCurrentAgentId.IsEmpty()) {
+    if (FState.CurrentAgentId.IsEmpty()) {
         ShowMessage("Create an agent first");
         return;
     }
@@ -144,11 +138,11 @@ void __fastcall TfrmMain::btnSendClick(TObject *Sender)
         json body;
         body["prompt"] = utf8(prompt);
         // Add resume flag if user selected Continue mode and session supports it
-        if (FResumeMode && FCanResume) {
+        if (FState.ResumeMode && FState.CanResume) {
             body["resume"] = true;
         }
 
-        json response = FHttpClient->Post("/agent/" + FCurrentAgentId + "/query", body);
+        json response = FHttpClient->Post("/agent/" + FState.CurrentAgentId + "/query", body);
 
         if (!response.is_discarded() && response.contains("status")) {
             std::string status = response["status"].get<std::string>();
@@ -167,12 +161,12 @@ void __fastcall TfrmMain::btnSendClick(TObject *Sender)
 //---------------------------------------------------------------------------
 void __fastcall TfrmMain::btnStopClick(TObject *Sender)
 {
-    if (FCurrentAgentId.IsEmpty()) {
+    if (FState.CurrentAgentId.IsEmpty()) {
         return;
     }
 
     try {
-        json response = FHttpClient->Post("/agent/" + FCurrentAgentId + "/interrupt", json::object());
+        json response = FHttpClient->Post("/agent/" + FState.CurrentAgentId + "/interrupt", json::object());
         if (!response.is_discarded()) {
             SetControlsState(true, true, false);
             UpdateStatus("Interrupted");
@@ -185,154 +179,31 @@ void __fastcall TfrmMain::btnStopClick(TObject *Sender)
 //---------------------------------------------------------------------------
 void __fastcall TfrmMain::OnSSEEvent(TObject *Sender, const json &Event)
 {
-    TEventData eventData;
-    eventData.Time = Now().FormatString("hh:nn:ss");
-    eventData.DurationMs = 0;
+    TEventParseResult r = TEventParser::Parse(Event);
 
-    UnicodeString type = "";
-    if (Event.contains("type")) {
-        type = u(Event["type"].get<std::string>());
-    }
-    eventData.Type = type;
-
-    if (type == "thinking") {
-        if (Event.contains("content")) {
-            eventData.Data = u(Event["content"].get<std::string>());
-        }
-    }
-    else if (type == "tool_start") {
-        if (Event.contains("tool")) {
-            eventData.Data = u(Event["tool"].get<std::string>()) + ": started";
-        }
-        if (Event.contains("input")) {
-            eventData.ToolInput = u(Event["input"].dump(2));
-        }
-        if (Event.contains("toolUseId")) {
-            eventData.ToolUseId = u(Event["toolUseId"].get<std::string>());
-        }
-    }
-    else if (type == "tool_end") {
-        UnicodeString tool = "";
-        int duration = 0;
-        if (Event.contains("tool")) {
-            tool = u(Event["tool"].get<std::string>());
-        }
-        if (Event.contains("durationMs")) {
-            duration = Event["durationMs"].get<int>();
-        }
-        eventData.Data = tool + ": done (" + IntToStr(duration) + "ms)";
-        eventData.DurationMs = duration;
-
-        if (Event.contains("input")) {
-            eventData.ToolInput = u(Event["input"].dump(2));
-        }
-        if (Event.contains("output")) {
-            eventData.ToolOutput = u(Event["output"].dump(2));
-        }
-        if (Event.contains("toolUseId")) {
-            eventData.ToolUseId = u(Event["toolUseId"].get<std::string>());
-        }
-    }
-    else if (type == "tool_error") {
-        UnicodeString tool = "";
-        UnicodeString errorText = "Unknown tool error";
-
-        if (Event.contains("tool")) {
-            tool = u(Event["tool"].get<std::string>());
-        }
-        if (Event.contains("error")) {
-            if (Event["error"].is_string()) {
-                errorText = u(Event["error"].get<std::string>());
-            } else {
-                errorText = u(Event["error"].dump());
-            }
-        }
-
-        eventData.Data = tool + ": error - " + errorText;
-        eventData.ToolOutput = u(json{{"error", utf8(errorText)}}.dump(2));
-
-        if (Event.contains("toolUseId")) {
-            eventData.ToolUseId = u(Event["toolUseId"].get<std::string>());
-        }
-    }
-    else if (type == "permission_request") {
-        UnicodeString tool = "unknown";
-        if (Event.contains("tool")) {
-            tool = u(Event["tool"].get<std::string>());
-        }
-        eventData.Data = tool + ": permission requested";
-
-        if (Event.contains("input")) {
-            eventData.ToolInput = u(Event["input"].dump(2));
-        }
-        if (Event.contains("requestId")) {
-            eventData.RequestId = u(Event["requestId"].get<std::string>());
-        }
-
-        UpdateStatus("Permission request: " + tool);
-    }
-    else if (type == "assistant_message") {
-        if (Event.contains("content")) {
-            eventData.Data = u(Event["content"].get<std::string>());
-        }
-    }
-    else if (type == "session_start") {
-        eventData.Data = "Session started";
-    }
-    else if (type == "session_info") {
-        // Update session info from server
-        if (Event.contains("sdkSessionId")) {
-            FSdkSessionId = u(Event["sdkSessionId"].get<std::string>());
-        }
-        if (Event.contains("canResume")) {
-            FCanResume = Event["canResume"].get<bool>();
-        }
+    // Apply side-effects
+    if (r.HasSessionInfo) {
+        FState.SdkSessionId = r.NewSdkSessionId;
+        FState.CanResume = r.NewCanResume;
         UpdateSessionInfo();
-        eventData.Data = "Session ID: " + FSdkSessionId.SubString(1, 12) + "...";
-    }
-    else if (type == "session_end") {
-        UnicodeString reason = "";
-        if (Event.contains("reason")) {
-            reason = u(Event["reason"].get<std::string>());
-        }
-        // Extract usage stats
-        if (Event.contains("usage")) {
-            const auto &usage = Event["usage"];
-            if (usage.contains("inputTokens")) {
-                FInputTokens = usage["inputTokens"].get<int>();
-            }
-            if (usage.contains("outputTokens")) {
-                FOutputTokens = usage["outputTokens"].get<int>();
-            }
-            if (usage.contains("totalCostUsd")) {
-                FTotalCostUsd = usage["totalCostUsd"].get<double>();
-            }
-            UpdateSessionInfo();
-        }
-        eventData.Data = "Session ended: " + reason;
-        SetControlsState(true, true, false);
-        UpdateStatus("Completed");
-    }
-    else if (type == "user_message") {
-        if (Event.contains("content")) {
-            eventData.Data = "User: " + u(Event["content"].get<std::string>());
-        }
-    }
-    else if (type == "connected") {
-        eventData.Data = "SSE connected";
-    }
-    else if (type == "error") {
-        if (Event.contains("message")) {
-            eventData.Data = "Error: " + u(Event["message"].get<std::string>());
-        } else {
-            eventData.Data = "Error";
-        }
-    }
-    else {
-        eventData.Data = type;
     }
 
-    AddEvent(eventData);
+    if (r.HasUsage) {
+        FState.InputTokens = r.InputTokens;
+        FState.OutputTokens = r.OutputTokens;
+        FState.TotalCostUsd = r.TotalCostUsd;
+        UpdateSessionInfo();
+    }
+
+    if (r.SessionEnded) {
+        SetControlsState(true, true, false);
+    }
+
+    if (r.HasStatusUpdate) {
+        UpdateStatus(r.StatusText);
+    }
+
+    AddEvent(r.EventData);
 }
 //---------------------------------------------------------------------------
 void __fastcall TfrmMain::OnSSEError(TObject *Sender, const UnicodeString &Error)
@@ -359,10 +230,10 @@ void __fastcall TfrmMain::OnSSEDisconnected(TObject *Sender)
 void TfrmMain::UpdateStatus(const UnicodeString &Status)
 {
     StatusBar->Panels->Items[0]->Text = Status;
-    StatusBar->Panels->Items[1]->Text = "Agent: " + (FCurrentAgentId.IsEmpty() ? "-" : FCurrentAgentId.SubString(1, 8));
-    StatusBar->Panels->Items[2]->Text = "Events: " + IntToStr(FEventCount);
+    StatusBar->Panels->Items[1]->Text = "Agent: " + (FState.CurrentAgentId.IsEmpty() ? "-" : FState.CurrentAgentId.SubString(1, 8));
+    StatusBar->Panels->Items[2]->Text = "Events: " + IntToStr(FEventStore.Count());
     // Session info in panel 3
-    if (FCanResume) {
+    if (FState.CanResume) {
         StatusBar->Panels->Items[3]->Text = "Session: resumable";
     } else {
         StatusBar->Panels->Items[3]->Text = "Session: -";
@@ -372,7 +243,7 @@ void TfrmMain::UpdateStatus(const UnicodeString &Status)
 void TfrmMain::AddEvent(const TEventData &eventData)
 {
     // Store full event data
-    FEventDataList.push_back(eventData);
+    FEventStore.Add(eventData);
 
     // Add to ListView
     TListItem *item = lvEvents->Items->Add();
@@ -385,8 +256,7 @@ void TfrmMain::AddEvent(const TEventData &eventData)
     }
     item->SubItems->Add(displayData);
 
-    FEventCount++;
-    StatusBar->Panels->Items[2]->Text = "Events: " + IntToStr(FEventCount);
+    StatusBar->Panels->Items[2]->Text = "Events: " + IntToStr(FEventStore.Count());
 
     // Auto-scroll to bottom
     item->MakeVisible(false);
@@ -394,10 +264,10 @@ void TfrmMain::AddEvent(const TEventData &eventData)
 //---------------------------------------------------------------------------
 void TfrmMain::SetControlsState(bool Connected, bool AgentCreated, bool Running)
 {
-    // Track state for MCP tools
-    FConnected = Connected;
-    FAgentCreated = AgentCreated;
-    FRunning = Running;
+    // Track state
+    FState.Connected = Connected;
+    FState.AgentCreated = AgentCreated;
+    FState.Running = Running;
 
     btnConnect->Enabled = !Connected;
     edtServer->Enabled = !Connected;
@@ -409,7 +279,7 @@ void TfrmMain::SetControlsState(bool Connected, bool AgentCreated, bool Running)
     // Session controls
     grpSession->Enabled = Connected;
     rbNewSession->Enabled = Connected && !Running;
-    rbContinue->Enabled = Connected && FCanResume && !Running;
+    rbContinue->Enabled = Connected && FState.CanResume && !Running;
 
     edtPrompt->Enabled = AgentCreated && !Running;
     btnSend->Enabled = AgentCreated && !Running;
@@ -419,31 +289,31 @@ void TfrmMain::SetControlsState(bool Connected, bool AgentCreated, bool Running)
 void TfrmMain::UpdateSessionInfo()
 {
     // Update session ID display
-    if (FSdkSessionId.IsEmpty()) {
+    if (FState.SdkSessionId.IsEmpty()) {
         lblSessionIdValue->Caption = "-";
     } else {
-        lblSessionIdValue->Caption = FSdkSessionId.SubString(1, 10) + "...";
+        lblSessionIdValue->Caption = FState.SdkSessionId.SubString(1, 10) + "...";
     }
 
     // Update tokens display
-    lblTokensValue->Caption = IntToStr(FInputTokens) + "/" + IntToStr(FOutputTokens);
+    lblTokensValue->Caption = IntToStr(FState.InputTokens) + "/" + IntToStr(FState.OutputTokens);
 
     // Update cost display
-    lblCostValue->Caption = "$" + FormatFloat("0.000", FTotalCostUsd);
+    lblCostValue->Caption = "$" + FormatFloat("0.000", FState.TotalCostUsd);
 
     // Enable/disable continue radio button based on canResume
-    rbContinue->Enabled = FCanResume && !FRunning;
+    rbContinue->Enabled = FState.CanResume && !FState.Running;
 }
 //---------------------------------------------------------------------------
 void TfrmMain::ShowEventDetails(int index)
 {
     mmoDetails->Clear();
 
-    if (index < 0 || index >= (int)FEventDataList.size()) {
+    if (index < 0 || index >= FEventStore.Count()) {
         return;
     }
 
-    const TEventData &ev = FEventDataList[index];
+    const TEventData &ev = FEventStore.Get(index);
 
     mmoDetails->Lines->Add("Type: " + ev.Type);
     mmoDetails->Lines->Add("Time: " + ev.Time);
@@ -488,12 +358,12 @@ void __fastcall TfrmMain::lvEventsSelectItem(TObject *Sender, TListItem *Item, b
 //---------------------------------------------------------------------------
 void __fastcall TfrmMain::rbNewSessionClick(TObject *Sender)
 {
-    FResumeMode = false;
+    FState.ResumeMode = false;
 }
 //---------------------------------------------------------------------------
 void __fastcall TfrmMain::rbContinueClick(TObject *Sender)
 {
-    FResumeMode = true;
+    FState.ResumeMode = true;
 }
 //---------------------------------------------------------------------------
 UnicodeString TfrmMain::GetStatusText() const
@@ -505,28 +375,12 @@ UnicodeString TfrmMain::GetStatusText() const
 //---------------------------------------------------------------------------
 std::vector<TEventData> TfrmMain::GetEvents(int limit, int offset) const
 {
-    std::vector<TEventData> result;
-
-    int count = FEventDataList.size();
-    int start = offset;
-    int end = count;
-
-    if (limit > 0 && start + limit < end)
-        end = start + limit;
-
-    for (int i = start; i < end; i++) {
-        result.push_back(FEventDataList[i]);
-    }
-
-    return result;
+    return FEventStore.GetRange(limit, offset);
 }
 //---------------------------------------------------------------------------
 TEventData TfrmMain::GetEventDetails(int index) const
 {
-    if (index >= 0 && index < (int)FEventDataList.size()) {
-        return FEventDataList[index];
-    }
-    return TEventData();
+    return FEventStore.GetSafe(index);
 }
 //---------------------------------------------------------------------------
 json TfrmMain::GetStatusBarPanels() const

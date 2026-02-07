@@ -81,10 +81,10 @@ bool TUiMcpServer::IsRunning() const
 }
 
 //---------------------------------------------------------------------------
-void TUiMcpServer::RegisterUiTools(TfrmMain *form)
+void TUiMcpServer::RegisterUiTools(IAppState *appState)
 {
-    if (FMcpServer && form)
-        Mcp::Tools::RegisterUiTools(*FMcpServer, form);
+    if (FMcpServer && appState)
+        Mcp::Tools::RegisterUiTools(*FMcpServer, appState);
 }
 
 //---------------------------------------------------------------------------

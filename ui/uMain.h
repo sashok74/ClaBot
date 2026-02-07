@@ -12,7 +12,9 @@
 #include "UcodeUtf8.h"
 #include "uHttpClient.h"
 #include "uSSEClient.h"
-#include <vector>
+#include "services/uEventStore.h"
+#include "services/uSessionState.h"
+#include "interfaces/uIAppState.h"
 #include <memory>
 
 using json = nlohmann::json;
@@ -20,21 +22,8 @@ using json = nlohmann::json;
 // Forward declaration
 class TUiMcpServer;
 
-// Event data structure for MCP tools
-struct TEventData
-{
-    UnicodeString Time;
-    UnicodeString Type;
-    UnicodeString Data;
-    // Extended fields for detailed tool info
-    UnicodeString ToolInput;   // JSON input for tool_start/tool_end
-    UnicodeString ToolOutput;  // JSON output for tool_end
-    UnicodeString ToolUseId;   // Tool use ID
-    UnicodeString RequestId;   // Permission request ID
-    int DurationMs;            // Duration for tool_end
-};
 //---------------------------------------------------------------------------
-class TfrmMain : public TForm
+class TfrmMain : public TForm, public IAppState
 {
 __published:    // IDE-managed Components
     TPanel *pnlTop;
@@ -82,22 +71,10 @@ private:    // User declarations
     THttpClient *FHttpClient;
     TSSEClient *FSSEClient;
     std::unique_ptr<TUiMcpServer> FMcpServer;
-    UnicodeString FCurrentAgentId;
-    int FEventCount;
-    bool FConnected;
-    bool FAgentCreated;
-    bool FRunning;
-    // Session tracking
-    UnicodeString FSdkSessionId;
-    bool FCanResume;
-    bool FResumeMode;  // User's choice: resume or new session
-    int FInputTokens;
-    int FOutputTokens;
-    double FTotalCostUsd;
+    TEventStore FEventStore;
+    TSessionState FState;
     // Currently selected event index
     int FSelectedEventIndex;
-    // Full event data storage (not just displayed text)
-    std::vector<TEventData> FEventDataList;
 
     void __fastcall OnSSEEvent(TObject *Sender, const json &Event);
     void __fastcall OnSSEError(TObject *Sender, const UnicodeString &Error);
@@ -113,49 +90,47 @@ private:    // User declarations
 public:     // User declarations
     __fastcall TfrmMain(TComponent* Owner);
 
-    // MCP UI tool accessors
-    bool IsConnected() const { return FConnected; }
-    UnicodeString GetAgentId() const { return FCurrentAgentId; }
-    int GetEventCount() const { return FEventCount; }
-    UnicodeString GetStatusText() const;
-    std::vector<TEventData> GetEvents(int limit, int offset) const;
-    nlohmann::json GetStatusBarPanels() const;
+    // === IAppState implementation ===
+    bool IsConnected() const override { return FState.Connected; }
+    UnicodeString GetAgentId() const override { return FState.CurrentAgentId; }
+    int GetEventCount() const override { return FEventStore.Count(); }
+    UnicodeString GetStatusText() const override;
+    nlohmann::json GetStatusBarPanels() const override;
+    std::vector<TEventData> GetEvents(int limit, int offset) const override;
+    TEventData GetEventDetails(int index) const override;
 
     // Control getters
-    UnicodeString GetServerUrl() const { return edtServer->Text; }
-    UnicodeString GetAgentName() const { return edtAgentName->Text; }
-    UnicodeString GetPrompt() const { return edtPrompt->Text; }
+    UnicodeString GetServerUrl() const override { return edtServer->Text; }
+    UnicodeString GetAgentName() const override { return edtAgentName->Text; }
+    UnicodeString GetPrompt() const override { return edtPrompt->Text; }
 
     // Button state getters
-    bool IsConnectEnabled() const { return btnConnect->Enabled; }
-    bool IsCreateAgentEnabled() const { return btnCreateAgent->Enabled; }
-    bool IsSendEnabled() const { return btnSend->Enabled; }
-    bool IsStopEnabled() const { return btnStop->Enabled; }
+    bool IsConnectEnabled() const override { return btnConnect->Enabled; }
+    bool IsCreateAgentEnabled() const override { return btnCreateAgent->Enabled; }
+    bool IsSendEnabled() const override { return btnSend->Enabled; }
+    bool IsStopEnabled() const override { return btnStop->Enabled; }
 
     // Button click actions (for MCP tools)
-    void ClickConnect() { btnConnectClick(nullptr); }
-    void ClickCreateAgent() { btnCreateAgentClick(nullptr); }
-    void ClickSend() { btnSendClick(nullptr); }
-    void ClickStop() { btnStopClick(nullptr); }
+    void ClickConnect() override { btnConnectClick(nullptr); }
+    void ClickCreateAgent() override { btnCreateAgentClick(nullptr); }
+    void ClickSend() override { btnSendClick(nullptr); }
+    void ClickStop() override { btnStopClick(nullptr); }
 
     // Control setters (for MCP tools)
-    void SetServerUrl(const UnicodeString &url) { edtServer->Text = url; }
-    void SetAgentName(const UnicodeString &name) { edtAgentName->Text = name; }
-    void SetPrompt(const UnicodeString &text) { edtPrompt->Text = text; }
+    void SetServerUrl(const UnicodeString &url) override { edtServer->Text = url; }
+    void SetAgentName(const UnicodeString &name) override { edtAgentName->Text = name; }
+    void SetPrompt(const UnicodeString &text) override { edtPrompt->Text = text; }
 
     // Session info accessors (for MCP tools)
-    UnicodeString GetSdkSessionId() const { return FSdkSessionId; }
-    bool GetCanResume() const { return FCanResume; }
-    bool GetResumeMode() const { return FResumeMode; }
-    int GetInputTokens() const { return FInputTokens; }
-    int GetOutputTokens() const { return FOutputTokens; }
-    double GetTotalCostUsd() const { return FTotalCostUsd; }
+    UnicodeString GetSdkSessionId() const override { return FState.SdkSessionId; }
+    bool GetCanResume() const override { return FState.CanResume; }
+    bool GetResumeMode() const override { return FState.ResumeMode; }
+    int GetInputTokens() const override { return FState.InputTokens; }
+    int GetOutputTokens() const override { return FState.OutputTokens; }
+    double GetTotalCostUsd() const override { return FState.TotalCostUsd; }
 
     // Resume mode setter
-    void SetResumeMode(bool resume) { FResumeMode = resume; }
-
-    // Get event details by index
-    TEventData GetEventDetails(int index) const;
+    void SetResumeMode(bool resume) override { FState.ResumeMode = resume; }
 };
 //---------------------------------------------------------------------------
 extern PACKAGE TfrmMain *frmMain;
