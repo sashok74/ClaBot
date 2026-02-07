@@ -48,6 +48,10 @@ npm-debug.log*
 *.zip
 *.7z
 
+# Build error reports (generated)
+doc/cpp_build/errors/
+doc/cpp_build/logs/
+
 # Temp files
 *.tmp
 *.temp
