@@ -63,5 +63,4 @@ NUL
 
 # Local configs (not shared)
 CLAUDE.local.md
-.claude/
 .env
